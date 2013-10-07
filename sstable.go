@@ -1,10 +1,11 @@
 package sstable
 
 import (
+  "errors"
   "fmt"
+  "io/ioutil"
+  "os"
 )
-
-type MemTable map[string][]byte
 
 const maxVarintBytes = 6
 
@@ -21,7 +22,6 @@ func EncodeVarint(x uint64) []byte {
 }
 
 func DecodeVarint(buf []byte) (x uint64, n int) {
-  // x, n already 0
   for shift := uint(0); shift < 64; shift += 7 {
     if n >= len(buf) {
       return 0, 0
@@ -33,51 +33,110 @@ func DecodeVarint(buf []byte) (x uint64, n int) {
       return x, n
     }
   }
-
-  // The number is too large to represent in a 64-bit value.
   return 0, 0
 }
 
-func EncodePair(key string, value []byte) ([]byte, error) {
-  key_length_bytes := EncodeVarint(uint64(len(key)))
-  value_length_bytes := EncodeVarint(uint64(len(value)))
-  encoded_key := append(key_length_bytes, []byte(key)...)
-  encoded_value := append(value_length_bytes, value...)
-  encoded_pair := append(encoded_key, encoded_value...)
-  return encoded_pair, nil
-}
-
-func DecodeBuf(buf []byte) (decoded []byte, err error) {
-  length, read := DecodeVarint(buf)
-  if read == 0 {
-    err = fmt.Errorf("Read 0 bytes")
-    return
-  }
-  decoded = buf[read:length]
+func EncodeBuf(buf []byte) (encoded []byte) {
+  encoded = append(EncodeVarint(uint64(len(buf))), buf...)
   return
 }
 
-func DecodePair(buf []byte) error {
-  key, err := DecodeBuf(buf)
-  if err != nil {
-    return err
+func DecodeBuf(buf []byte, decoded *[]byte) (n int, err error) {
+  length, n := DecodeVarint(buf)
+  if n == 0 {
+    err = fmt.Errorf("Read 0 bytes")
+    return
   }
 
-  value, err := DecodeBuf(buf[len(key):])
+  *decoded = buf[n : length+1]
+
+  n += int(length)
+  return
+}
+
+type Pair struct {
+  Key   []byte
+  Value []byte
+}
+
+func (p *Pair) Encode() (encoded []byte, err error) {
+  encoded = append(EncodeBuf(p.Key), EncodeBuf(p.Value)...)
+  return
+}
+
+func (p *Pair) Decode(encoded []byte) (nn uint, err error) {
+  decoded_key := []byte{}
+  n, err := DecodeBuf(encoded, &decoded_key)
   if err != nil {
-    return err
+    return
   }
+  nn += uint(n)
 
-  fmt.Printf("Key: %v, value: %v", key, value)
-  return nil
+  decoded_val := []byte{}
+  n, err = DecodeBuf(encoded[n:], &decoded_val)
+  if err != nil {
+    return
+  }
+  nn += uint(n)
+
+  p.Key = decoded_key
+  p.Value = decoded_val
+  return
 }
 
-func Flush(table *MemTable, filename string) error {
-  return nil
+func EncodePairStream(filename string, pair_chan chan Pair) {
+  file, err := os.Create(filename)
+  if err != nil {
+    panic(err.Error())
+    return
+  }
+  defer file.Close()
+  defer close(pair_chan)
+
+  for {
+    pair, ok := <-pair_chan
+    if !ok {
+      return
+    }
+    encoded, err := pair.Encode()
+    if err != nil {
+      panic(err.Error())
+      return
+    }
+
+    n, err := file.Write(encoded)
+    if err != nil {
+      panic(err.Error())
+      return
+    }
+
+    if n != len(encoded) {
+      err = errors.New("Didn't write entire buffer!")
+      panic(err.Error())
+      return
+    }
+  }
 }
 
-type SSTableSet []SSTableRef
+func DecodePairStream(filename string, pair_chan chan *Pair) {
+  bytes, err := ioutil.ReadFile(filename)
+  if err != nil {
+    panic(err.Error())
+  }
+  defer close(pair_chan)
 
-type SSTableRef struct {
-  filename string
+  for {
+    pair := &Pair{}
+    n, err := pair.Decode(bytes)
+    if err != nil {
+      panic(err.Error())
+    }
+
+    pair_chan <- pair
+
+    bytes = bytes[n:]
+    if len(bytes) == 0 {
+      break
+    }
+  }
 }
