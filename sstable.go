@@ -115,7 +115,6 @@ func EncodePairStream(filename string, pair_chan chan *Pair) {
       break
     }
 
-    fmt.Print(pair.Key.String())
     encoded, err := pair.Encode()
     if err != nil {
       panic(err.Error())
