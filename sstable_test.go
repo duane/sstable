@@ -7,6 +7,29 @@ import (
   "testing"
 )
 
+type KeyString string
+
+func (key *KeyString) Equals(other interface{}) bool {
+  return string(*key) == string(*(other.(*KeyString)))
+}
+
+func (key *KeyString) Less(other interface{}) bool {
+  return string(*key) < string(*(other.(*KeyString)))
+}
+
+func (key *KeyString) MarshalKey() ([]byte, error) {
+  return []byte(*key), nil
+}
+
+func (key *KeyString) UnmarshalKey(data []byte) error {
+  *key = KeyString(string(data))
+  return nil
+}
+
+func (key *KeyString) String() string {
+  return string(*key)
+}
+
 func TestEncodeDecode(t *testing.T) {
   test_data := map[string][]byte{
     "1520235a-0986-4d82-abc0-cf2482c69f73": []byte("32610c7f-f99c-46c1-91fc-8b0830bd596f"),
@@ -33,7 +56,8 @@ func TestEncodeDecode(t *testing.T) {
 
   pairs := []*Pair{}
   for k, v := range test_data {
-    pairs = append(pairs, &Pair{Key: []byte(k), Value: v})
+    key_string := KeyString(k)
+    pairs = append(pairs, &Pair{Key: &key_string, Value: v})
   }
 
   pair := pairs[0]
@@ -44,14 +68,15 @@ func TestEncodeDecode(t *testing.T) {
 
   log.Print(hex.EncodeToString(encoded))
 
-  pair2 := &Pair{}
-  err = pair2.Decode(encoded)
+  key := ""
+  pair2 := &Pair{Key: (*KeyString)(&key)}
+  _, err = pair2.Decode(encoded)
   if err != nil {
     t.Fail()
   }
 
-  if !bytes.Equal(pair.Key, pair2.Key) {
-    t.Fatalf("%d vs %d", len(pair.Key), len(pair2.Key))
+  if !pair.Key.Equals(pair2.Key) {
+    t.Fatalf("%v vs %v", pair.Key, pair2.Key)
   } else if !bytes.Equal(pair.Value, pair2.Value) {
     t.Fatalf("%v vs %v", pair.Value, pair2.Value)
   }

@@ -9,6 +9,14 @@ import (
 
 const maxVarintBytes = 6
 
+type Key interface {
+  Equals(other interface{}) bool
+  Less(other interface{}) bool
+  MarshalKey() ([]byte, error)
+  UnmarshalKey(data []byte) error
+  String() string
+}
+
 func EncodeVarint(x uint64) []byte {
   var buf [maxVarintBytes]byte
   var n int
@@ -55,21 +63,31 @@ func DecodeBuf(buf []byte, decoded *[]byte) (n int, err error) {
 }
 
 type Pair struct {
-  Key   []byte
+  Key   Key
   Value []byte
 }
 
 func (p *Pair) Encode() (encoded []byte, err error) {
-  encoded = append(EncodeBuf(p.Key), EncodeBuf(p.Value)...)
+  key_buf, err := p.Key.MarshalKey()
+  if err != nil {
+    return
+  }
+
+  encoded = append(EncodeBuf(key_buf), EncodeBuf(p.Value)...)
   return
 }
 
 func (p *Pair) Decode(encoded []byte) (nn uint, err error) {
-  decoded_key := []byte{}
-  n, err := DecodeBuf(encoded, &decoded_key)
+  key_buf := []byte{}
+  n, err := DecodeBuf(encoded, &key_buf)
   if err != nil {
     return
   }
+  err = p.Key.UnmarshalKey(key_buf)
+  if err != nil {
+    return
+  }
+
   nn += uint(n)
 
   decoded_val := []byte{}
@@ -79,25 +97,25 @@ func (p *Pair) Decode(encoded []byte) (nn uint, err error) {
   }
   nn += uint(n)
 
-  p.Key = decoded_key
   p.Value = decoded_val
   return
 }
 
-func EncodePairStream(filename string, pair_chan chan Pair) {
+func EncodePairStream(filename string, pair_chan chan *Pair) {
   file, err := os.Create(filename)
   if err != nil {
     panic(err.Error())
     return
   }
   defer file.Close()
-  defer close(pair_chan)
 
   for {
     pair, ok := <-pair_chan
     if !ok {
-      return
+      break
     }
+
+    fmt.Print(pair.Key.String())
     encoded, err := pair.Encode()
     if err != nil {
       panic(err.Error())
@@ -115,10 +133,11 @@ func EncodePairStream(filename string, pair_chan chan Pair) {
       panic(err.Error())
       return
     }
+    pair_chan <- nil
   }
 }
 
-func DecodePairStream(filename string, pair_chan chan *Pair) {
+func DecodePairStream(key_ctor func() Key, filename string, pair_chan chan *Pair) {
   bytes, err := ioutil.ReadFile(filename)
   if err != nil {
     panic(err.Error())
@@ -126,7 +145,7 @@ func DecodePairStream(filename string, pair_chan chan *Pair) {
   defer close(pair_chan)
 
   for {
-    pair := &Pair{}
+    pair := &Pair{Key: key_ctor()}
     n, err := pair.Decode(bytes)
     if err != nil {
       panic(err.Error())
